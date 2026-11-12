@@ -18,7 +18,9 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
 
   void openSettings(String action, String label) async {
     setState(() => netLabel = label);
-    if (Platform.isAndroid) await AndroidIntent(action: action).launch();
+    if (Platform.isAndroid) {
+      await AndroidIntent(action: action).launch();
+    }
   }
 
   void showNetMenu() {
@@ -31,15 +33,10 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Switch Connection to Test',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Switch Connection to Test', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xff4c1a80),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14)),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff4c1a80), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
               icon: const Icon(Icons.wifi),
               label: const Text('Switch Wi-Fi Network'),
               onPressed: () {
@@ -49,16 +46,12 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xff333333),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14)),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff333333), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
               icon: const Icon(Icons.cell_tower),
               label: const Text('Switch to Mobile Data'),
               onPressed: () {
                 Navigator.pop(context);
-                openSettings('android.settings.DATA_ROAMING_SETTINGS',
-                    'Mobile Data Test');
+                openSettings('android.settings.DATA_ROAMING_SETTINGS', 'Mobile Data Test');
               },
             ),
           ],
@@ -68,21 +61,14 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
   }
 
   void runTest() async {
-    setState(() {
-      isTesting = true;
-      phase = "Testing Ping";
-      ping = 0;
-      down = 0.0;
-      up = 0.0;
-      gauge = 0.05;
-    });
+    setState(() { isTesting = true; phase = "Testing Ping"; ping = 0; down = 0.0; up = 0.0; gauge = 0.05; });
 
     final swPing = Stopwatch()..start();
     try {
-      await http
-          .get(Uri.parse('https://google.com'))
-          .timeout(const Duration(seconds: 3));
-      if (mounted) setState(() => ping = swPing.elapsedMilliseconds);
+      await http.get(Uri.parse('https://google.com')).timeout(const Duration(seconds: 3));
+      if (mounted) {
+        setState(() => ping = swPing.elapsedMilliseconds);
+      }
     } catch (_) {}
 
     await Future.delayed(const Duration(milliseconds: 500));
@@ -96,86 +82,70 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
 
     try {
       final client = http.Client();
-      final res = await client
-          .send(http.Request('GET', Uri.parse('https://cloudflare.com')));
+      final res = await client.send(http.Request('GET', Uri.parse('https://cloudflare.com')));
       await for (var chunk in res.stream) {
         if (!runDown || !mounted) break;
         bytesDown += chunk.length;
         double sec = swDown.elapsedMilliseconds / 1000.0;
-        if (sec > 0.2)
+        if (sec > 0.2) {
           setState(() {
             down = (bytesDown * 8) / (sec * 1000000);
             gauge = (down / 250.0).clamp(0.0, 1.0);
           });
+        }
       }
       client.close();
     } catch (_) {}
 
     if (!mounted) return;
-    setState(() {
-      phase = "Testing Upload Speed";
-      gauge = 0.0;
-    });
+    setState(() { phase = "Testing Upload Speed"; gauge = 0.0; });
     await Future.delayed(const Duration(milliseconds: 500));
 
     final swUp = Stopwatch()..start();
     int bytesUp = 0;
     bool runUp = true;
     Timer(const Duration(seconds: 6), () => runUp = false);
-    final payload = '0' * 250000;
+    final payload = '0' * 150000;
 
     while (runUp && mounted) {
       try {
-        final res = await http
-            .post(Uri.parse('https://httpbin.org'),
-                headers: {'Content-Type': 'text/plain'}, body: payload)
-            .timeout(const Duration(seconds: 3));
+        final res = await http.post(
+          Uri.parse('https://cloudflare.com'),
+          headers: {'Content-Type': 'text/plain'},
+          body: payload,
+        ).timeout(const Duration(seconds: 4));
+
         if (res.statusCode == 200) {
           bytesUp += payload.length;
           double sec = swUp.elapsedMilliseconds / 1000.0;
-          if (sec > 0.2)
+          if (sec > 0.2) {
             setState(() {
               up = (bytesUp * 8) / (sec * 1000000);
               gauge = (up / 150.0).clamp(0.0, 1.0);
             });
+          }
         }
       } catch (_) {}
     }
 
-    if (mounted)
-      setState(() {
-        isTesting = false;
-        phase = "COMPLETED";
-        gauge = 0.0;
-      });
+    if (mounted) {
+      setState(() { isTesting = false; phase = "COMPLETED"; gauge = 0.0; });
+    }
   }
 
   Widget statCol(String label, String val, Color col) => Column(children: [
-        Text(label,
-            style: const TextStyle(
-                fontSize: 11,
-                color: Colors.white38,
-                fontWeight: FontWeight.bold)),
+        Text(label, style: const TextStyle(fontSize: 11, color: Colors.white38, fontWeight: FontWeight.bold)),
         const SizedBox(height: 4),
-        Text(val,
-            style: TextStyle(
-                fontSize: 18, fontWeight: FontWeight.bold, color: col)),
+        Text(val, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: col)),
       ]);
 
   @override
   Widget build(BuildContext context) {
-    String centerText = !isTesting
-        ? "START"
-        : (phase == "Testing Ping"
-            ? "$ping ms"
-            : (phase.contains("Download")
-                ? down.toStringAsFixed(1)
-                : up.toStringAsFixed(1)));
+    String centerText = !isTesting ? "START" : (phase == "Testing Ping" ? "$ping ms" : (phase.contains("Download") ? down.toStringAsFixed(1) : up.toStringAsFixed(1)));
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Guest Speedtest',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        title: const Text('Guest Speedtest', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         backgroundColor: const Color(0xff111111),
         centerTitle: true,
         leading: const Icon(Icons.person_outline, color: Colors.white54),
@@ -192,54 +162,30 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
           children: [
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                  color: Colors.white10,
-                  borderRadius: BorderRadius.circular(20)),
-              child: Text("Mode: $netLabel",
-                  style: const TextStyle(
-                      fontSize: 12,
-                      color: Colors.white70,
-                      fontWeight: FontWeight.bold)),
+              decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20)),
+              child: Text("Mode: $netLabel", style: const TextStyle(fontSize: 12, color: Colors.white70, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(height: 24),
             Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
               statCol("PING", "$ping ms", Colors.amberAccent),
-              statCol("DOWNLOAD", "${down.toStringAsFixed(1)} Mbps",
-                  const Color(0xffa366ff)),
-              statCol("UPLOAD", "${up.toStringAsFixed(1)} Mbps",
-                  const Color(0xffdf80ff)),
+              statCol("DOWNLOAD", "${down.toStringAsFixed(1)} Mbps", const Color(0xffa366ff)),
+              statCol("UPLOAD", "${up.toStringAsFixed(1)} Mbps", const Color(0xffdf80ff)),
             ]),
             const Spacer(),
             Stack(
               alignment: Alignment.center,
               children: [
-                SizedBox(
-                    width: 220,
-                    height: 220,
-                    child: CircularProgressIndicator(
-                        value: gauge,
-                        strokeWidth: 10,
-                        color: const Color(0xff4c1a80),
-                        backgroundColor: Colors.white10)),
+                SizedBox(width: 220, height: 220, child: CircularProgressIndicator(value: gauge, strokeWidth: 10, color: const Color(0xff4c1a80), backgroundColor: Colors.white10)),
                 GestureDetector(
                   onTap: isTesting ? null : runTest,
                   child: Container(
-                    width: 180,
-                    height: 180,
-                    decoration: const BoxDecoration(
-                        shape: BoxShape.circle, color: Color(0xff262626)),
+                    width: 180, height: 180,
+                    decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xff262626)),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Text(centerText,
-                            style: const TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white)),
-                        if (isTesting && phase != "Testing Ping")
-                          const Text("Mbps",
-                              style: TextStyle(
-                                  fontSize: 12, color: Colors.white38)),
+                        Text(centerText, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
+                        if (isTesting && phase != "Testing Ping") const Text("Mbps", style: TextStyle(fontSize: 12, color: Colors.white38)),
                       ],
                     ),
                   ),
@@ -247,22 +193,14 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
               ],
             ),
             const SizedBox(height: 30),
-            Text(phase,
-                style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white54)),
+            Text(phase, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white54)),
             const Spacer(),
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Color(0xff4c1a80), width: 2),
-                    padding: const EdgeInsets.symmetric(vertical: 14)),
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Color(0xff4c1a80), width: 2), padding: const EdgeInsets.symmetric(vertical: 14)),
                 icon: const Icon(Icons.swap_horiz),
-                label: const Text('Change Wi-Fi / Mobile Data',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
+                label: const Text('Change Wi-Fi / Mobile Data', style: TextStyle(fontWeight: FontWeight.bold)),
                 onPressed: isTesting ? null : showNetMenu,
               ),
             ),
