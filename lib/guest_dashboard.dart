@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:android_intent_plus/android_intent.dart';
@@ -65,68 +66,99 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
 
     final swPing = Stopwatch()..start();
     try {
-      await http.get(Uri.parse('https://google.com')).timeout(const Duration(seconds: 3));
-      if (mounted) {
-        setState(() => ping = swPing.elapsedMilliseconds);
-      }
+      await http.get(Uri.parse('https://cloudflare.com')).timeout(const Duration(seconds: 3));
+      if (mounted) setState(() => ping = swPing.elapsedMilliseconds);
     } catch (_) {}
 
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future.delayed(const Duration(milliseconds: 400));
     if (!mounted) return;
     setState(() => phase = "Testing Download Speed");
 
+    // 4 Parallel Download Streams for 6 seconds
     final swDown = Stopwatch()..start();
     int bytesDown = 0;
     bool runDown = true;
-    Timer(const Duration(seconds: 6), () => runDown = false);
+    final clients = List.generate(4, (_) => http.Client());
 
-    try {
-      final client = http.Client();
-      final res = await client.send(http.Request('GET', Uri.parse('https://cloudflare.com')));
-      await for (var chunk in res.stream) {
-        if (!runDown || !mounted) break;
-        bytesDown += chunk.length;
-        double sec = swDown.elapsedMilliseconds / 1000.0;
-        if (sec > 0.2) {
-          setState(() {
-            down = (bytesDown * 8) / (sec * 1000000);
-            gauge = (down / 250.0).clamp(0.0, 1.0);
-          });
+    final uiTimerDown = Timer.periodic(const Duration(milliseconds: 150), (_) {
+      double sec = swDown.elapsedMilliseconds / 1000.0;
+      if (sec > 0.2 && mounted && runDown) {
+        setState(() {
+          down = (bytesDown * 8) / (sec * 1000000);
+          gauge = (down / 250.0).clamp(0.0, 1.0);
+        });
+      }
+    });
+
+    Future<void> downloadWorker(http.Client client) async {
+      while (runDown && mounted) {
+        try {
+          final res = await client.send(http.Request('GET', Uri.parse('https://cloudflare.com00000000')));
+          await for (var chunk in res.stream) {
+            if (!runDown || !mounted) break;
+            bytesDown += chunk.length;
+          }
+        } catch (_) {
+          await Future.delayed(const Duration(milliseconds: 100));
         }
       }
-      client.close();
-    } catch (_) {}
+    }
+
+    final downFutures = clients.map((c) => downloadWorker(c)).toList();
+    await Future.delayed(const Duration(seconds: 6));
+    runDown = false;
+    uiTimerDown.cancel();
+    for (var c in clients) { c.close(); }
+    await Future.wait(downFutures);
 
     if (!mounted) return;
     setState(() { phase = "Testing Upload Speed"; gauge = 0.0; });
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future.delayed(const Duration(milliseconds: 400));
 
+    // 3 Parallel Native Socket Upload Streams for 6 seconds
     final swUp = Stopwatch()..start();
     int bytesUp = 0;
     bool runUp = true;
-    Timer(const Duration(seconds: 6), () => runUp = false);
-    final payload = '0' * 150000;
+    final Uint8List chunk64k = Uint8List(65536);
 
-    while (runUp && mounted) {
-      try {
-        final res = await http.post(
-          Uri.parse('https://cloudflare.com'),
-          headers: {'Content-Type': 'text/plain'},
-          body: payload,
-        ).timeout(const Duration(seconds: 4));
+    final uiTimerUp = Timer.periodic(const Duration(milliseconds: 150), (_) {
+      double sec = swUp.elapsedMilliseconds / 1000.0;
+      if (sec > 0.2 && mounted && runUp) {
+        setState(() {
+          up = (bytesUp * 8) / (sec * 1000000);
+          gauge = (up / 150.0).clamp(0.0, 1.0);
+        });
+      }
+    });
 
-        if (res.statusCode == 200) {
-          bytesUp += payload.length;
-          double sec = swUp.elapsedMilliseconds / 1000.0;
-          if (sec > 0.2) {
-            setState(() {
-              up = (bytesUp * 8) / (sec * 1000000);
-              gauge = (up / 150.0).clamp(0.0, 1.0);
-            });
+    Future<void> uploadWorker() async {
+      final ioClient = HttpClient();
+      while (runUp && mounted) {
+        try {
+          final req = await ioClient.postUrl(Uri.parse('https://cloudflare.com'));
+          req.headers.set('Origin', 'https://cloudflare.com');
+          req.headers.set('Content-Type', 'application/octet-stream');
+          req.contentLength = chunk64k.length * 16; // 1 MB per request
+          for (int i = 0; i < 16; i++) {
+            if (!runUp || !mounted) break;
+            req.add(chunk64k);
+            await req.flush();
+            bytesUp += chunk64k.length;
           }
+          final res = await req.close();
+          await res.drain();
+        } catch (_) {
+          await Future.delayed(const Duration(milliseconds: 100));
         }
-      } catch (_) {}
+      }
+      ioClient.close(force: true);
     }
+
+    final upFutures = List.generate(3, (_) => uploadWorker());
+    await Future.delayed(const Duration(seconds: 6));
+    runUp = false;
+    uiTimerUp.cancel();
+    await Future.wait(upFutures);
 
     if (mounted) {
       setState(() { isTesting = false; phase = "COMPLETED"; gauge = 0.0; });
