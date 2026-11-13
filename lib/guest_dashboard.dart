@@ -14,9 +14,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
   bool isTesting = false;
   bool showGuestLockNotice = false;
   String phase = "READY";
-  String forcedMode = "AUTO"; // "AUTO", "WIFI", "MOBILE"
-  String activeBadge = "Checking...";
-  InternetAddress? boundLocalIp;
+  String activeNetwork = "Wi-Fi";
   int ping = 0;
   double down = 0.0, up = 0.0, gauge = 0.0;
   Timer? _netWatchTimer;
@@ -24,9 +22,9 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
   @override
   void initState() {
     super.initState();
-    resolveNetworkBinding();
+    detectNetwork();
     _netWatchTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (!isTesting) resolveNetworkBinding();
+      if (!isTesting) detectNetwork();
     });
   }
 
@@ -36,59 +34,27 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     super.dispose();
   }
 
-  Future<void> resolveNetworkBinding() async {
+  Future<void> detectNetwork() async {
     try {
       final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      InternetAddress? wifiIp;
-      InternetAddress? cellIp;
+      bool hasWifi = false;
+      bool hasCellular = false;
 
       for (var iface in interfaces) {
         final name = iface.name.toLowerCase();
         if (iface.addresses.isEmpty) continue;
         if (name.contains('wlan') || name.contains('wifi')) {
-          wifiIp = iface.addresses.first;
+          hasWifi = true;
         } else if (name.contains('rmnet') || name.contains('ccmni') || name.contains('pdp') || name.contains('wwan')) {
-          cellIp = iface.addresses.first;
+          hasCellular = true;
         }
       }
 
-      InternetAddress? targetIp;
-      String label = "Offline";
-
-      if (forcedMode == "WIFI") {
-        targetIp = wifiIp;
-        label = wifiIp != null ? "Wi-Fi Only (Locked)" : "Wi-Fi Disconnected";
-      } else if (forcedMode == "MOBILE") {
-        targetIp = cellIp;
-        label = cellIp != null ? "Mobile Data Only (Locked)" : "Mobile Data Off";
-      } else {
-        if (wifiIp != null) {
-          targetIp = wifiIp;
-          label = "Wi-Fi (Auto)";
-        } else if (cellIp != null) {
-          targetIp = cellIp;
-          label = "Mobile Data (Auto)";
-        }
-      }
-
-      if (mounted && (activeBadge != label || boundLocalIp != targetIp)) {
-        setState(() {
-          boundLocalIp = targetIp;
-          activeBadge = label;
-        });
+      String detected = hasWifi ? "Wi-Fi" : (hasCellular ? "Mobile Data" : "Offline");
+      if (mounted && activeNetwork != detected) {
+        setState(() => activeNetwork = detected);
       }
     } catch (_) {}
-  }
-
-  HttpClient createBoundHttpClient() {
-    final client = HttpClient();
-    final ip = boundLocalIp;
-    if (ip != null) {
-      client.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) {
-        return Socket.startConnect(uri.host, uri.port, sourceAddress: ip);
-      };
-    }
-    return client;
   }
 
   void showNetMenu() {
@@ -101,43 +67,34 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Select Network Route', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Change Network', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff4c1a80), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
               icon: const Icon(Icons.wifi),
-              label: const Text('Wi-Fi Only (Ignore Mobile Data)'),
+              label: const Text('Switch to Wi-Fi'),
               onPressed: () async {
                 Navigator.pop(context);
-                setState(() => forcedMode = "WIFI");
-                await resolveNetworkBinding();
-                if (boundLocalIp == null && Platform.isAndroid) {
+                if (Platform.isAndroid) {
                   await AndroidIntent(action: 'android.settings.WIFI_SETTINGS').launch();
                 }
+                await Future.delayed(const Duration(seconds: 1));
+                detectNetwork();
               },
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff6a1b9a), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff333333), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
               icon: const Icon(Icons.cell_tower),
-              label: const Text('Mobile Data Only (Ignore Wi-Fi)'),
+              label: const Text('Switch to Mobile Data'),
               onPressed: () async {
                 Navigator.pop(context);
-                setState(() => forcedMode = "MOBILE");
-                await resolveNetworkBinding();
-                if (boundLocalIp == null && Platform.isAndroid) {
+                if (Platform.isAndroid) {
                   await AndroidIntent(action: 'android.settings.DATA_ROAMING_SETTINGS').launch();
                 }
+                await Future.delayed(const Duration(seconds: 1));
+                detectNetwork();
               },
-            ),
-            const SizedBox(height: 12),
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                setState(() => forcedMode = "AUTO");
-                await resolveNetworkBinding();
-              },
-              child: const Text('Auto-Detect Default Network', style: TextStyle(color: Colors.white70)),
             ),
           ],
         ),
@@ -145,17 +102,12 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     );
   }
   void runTest() async {
-    await resolveNetworkBinding();
-    if (forcedMode != "AUTO" && boundLocalIp == null) {
-      setState(() => phase = "Enable ${forcedMode == 'WIFI' ? 'Wi-Fi' : 'Mobile Data'} first!");
-      return;
-    }
-
+    await detectNetwork();
     setState(() { isTesting = true; phase = "Testing Ping"; ping = 0; down = 0.0; up = 0.0; gauge = 0.05; });
 
     int bestPing = 9999;
     Future<void> pingWorker() async {
-      final client = createBoundHttpClient();
+      final client = HttpClient();
       try {
         final warmReq = await client.getUrl(Uri.parse('https://cloudflare.com'));
         final warmRes = await warmReq.close();
@@ -199,7 +151,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     });
 
     Future<void> downloadWorker() async {
-      final ioClient = createBoundHttpClient();
+      final ioClient = HttpClient();
       while (runDown && mounted) {
         try {
           final req = await ioClient.getUrl(Uri.parse('https://cloudflare.com'));
@@ -242,7 +194,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     });
 
     Future<void> uploadWorker() async {
-      final ioClient = createBoundHttpClient();
+      final ioClient = HttpClient();
       while (runUp && mounted) {
         try {
           final req = await ioClient.postUrl(Uri.parse('https://cloudflare.com/__up'));
@@ -272,7 +224,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
 
     if (mounted) {
       setState(() { isTesting = false; phase = "COMPLETED"; gauge = 0.0; });
-      resolveNetworkBinding();
+      detectNetwork();
     }
   }
   Widget statCol(String label, String val, Color col) => Column(children: [
@@ -377,9 +329,9 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(activeBadge.contains("Wi-Fi") ? Icons.wifi : Icons.cell_tower, size: 14, color: const Color(0xffa366ff)),
+                  Icon(activeNetwork == "Wi-Fi" ? Icons.wifi : Icons.cell_tower, size: 14, color: const Color(0xffa366ff)),
                   const SizedBox(width: 6),
-                  Text("Mode: $activeBadge", style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
+                  Text("Connection: $activeNetwork", style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
