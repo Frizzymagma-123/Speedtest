@@ -14,7 +14,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
   bool isTesting = false;
   bool showGuestLockNotice = false;
   String phase = "READY";
-  String activeNetwork = "Wi-Fi";
+  String selectedMode = "Wi-Fi";
   int ping = 0;
   double down = 0.0, up = 0.0, gauge = 0.0;
   Timer? _netWatchTimer;
@@ -22,9 +22,9 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
   @override
   void initState() {
     super.initState();
-    detectNetwork();
+    syncActiveNetwork();
     _netWatchTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (!isTesting) detectNetwork();
+      if (!isTesting) syncActiveNetwork();
     });
   }
 
@@ -34,27 +34,28 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     super.dispose();
   }
 
-  Future<void> detectNetwork() async {
+  Future<String> getHardwareNetwork() async {
     try {
       final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
       bool hasWifi = false;
       bool hasCellular = false;
-
       for (var iface in interfaces) {
         final name = iface.name.toLowerCase();
         if (iface.addresses.isEmpty) continue;
-        if (name.contains('wlan') || name.contains('wifi')) {
-          hasWifi = true;
-        } else if (name.contains('rmnet') || name.contains('ccmni') || name.contains('pdp') || name.contains('wwan')) {
-          hasCellular = true;
-        }
+        if (name.contains('wlan') || name.contains('wifi')) hasWifi = true;
+        if (name.contains('rmnet') || name.contains('ccmni') || name.contains('pdp') || name.contains('wwan')) hasCellular = true;
       }
-
-      String detected = hasWifi ? "Wi-Fi" : (hasCellular ? "Mobile Data" : "Offline");
-      if (mounted && activeNetwork != detected) {
-        setState(() => activeNetwork = detected);
-      }
+      if (hasWifi) return "Wi-Fi";
+      if (hasCellular) return "Mobile Data";
     } catch (_) {}
+    return "Disconnected";
+  }
+
+  Future<void> syncActiveNetwork() async {
+    final current = await getHardwareNetwork();
+    if (mounted && current != "Disconnected" && selectedMode != current) {
+      setState(() => selectedMode = current);
+    }
   }
 
   void showNetMenu() {
@@ -67,7 +68,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Change Network', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Switch Connection to Test', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff4c1a80), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
@@ -75,11 +76,10 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
               label: const Text('Switch to Wi-Fi'),
               onPressed: () async {
                 Navigator.pop(context);
+                setState(() => selectedMode = "Wi-Fi");
                 if (Platform.isAndroid) {
                   await AndroidIntent(action: 'android.settings.WIFI_SETTINGS').launch();
                 }
-                await Future.delayed(const Duration(seconds: 1));
-                detectNetwork();
               },
             ),
             const SizedBox(height: 12),
@@ -89,11 +89,10 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
               label: const Text('Switch to Mobile Data'),
               onPressed: () async {
                 Navigator.pop(context);
+                setState(() => selectedMode = "Mobile Data");
                 if (Platform.isAndroid) {
-                  await AndroidIntent(action: 'android.settings.DATA_ROAMING_SETTINGS').launch();
+                  await AndroidIntent(action: 'android.settings.WIFI_SETTINGS').launch();
                 }
-                await Future.delayed(const Duration(seconds: 1));
-                detectNetwork();
               },
             ),
           ],
@@ -102,8 +101,37 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     );
   }
   void runTest() async {
-    await detectNetwork();
+    final startNet = await getHardwareNetwork();
+    if (startNet == "Disconnected") {
+      setState(() => phase = "Connection Disconnected");
+      return;
+    }
+    if (selectedMode == "Mobile Data" && startNet == "Wi-Fi") {
+      setState(() => phase = "Turn off Wi-Fi first to test Mobile Data");
+      return;
+    }
+    if (selectedMode == "Wi-Fi" && startNet != "Wi-Fi") {
+      setState(() => phase = "Connect to Wi-Fi first");
+      return;
+    }
+
+    bool aborted = false;
     setState(() { isTesting = true; phase = "Testing Ping"; ping = 0; down = 0.0; up = 0.0; gauge = 0.05; });
+
+    final guardTimer = Timer.periodic(const Duration(milliseconds: 250), (t) async {
+      final liveNet = await getHardwareNetwork();
+      if (liveNet != startNet) {
+        aborted = true;
+        t.cancel();
+        if (mounted) {
+          setState(() {
+            isTesting = false;
+            phase = "Connection Disconnected";
+            gauge = 0.0;
+          });
+        }
+      }
+    });
 
     int bestPing = 9999;
     Future<void> pingWorker() async {
@@ -114,14 +142,14 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
         await warmRes.drain();
 
         for (int i = 0; i < 3; i++) {
-          if (!mounted) break;
+          if (!mounted || aborted) break;
           final sw = Stopwatch()..start();
           final req = await client.getUrl(Uri.parse('https://cloudflare.com'));
           final res = await req.close();
           await res.drain();
           sw.stop();
           int ms = sw.elapsedMilliseconds;
-          if (ms > 0 && ms < bestPing) {
+          if (ms > 0 && ms < bestPing && !aborted) {
             bestPing = ms;
             if (mounted) setState(() => ping = bestPing);
           }
@@ -132,8 +160,9 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     }
     await Future.wait(List.generate(6, (_) => pingWorker()));
 
-    await Future.delayed(const Duration(milliseconds: 400));
-    if (!mounted) return;
+    if (aborted || !mounted) { guardTimer.cancel(); return; }
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (aborted || !mounted) { guardTimer.cancel(); return; }
     setState(() => phase = "Testing Download Speed");
 
     final swDown = Stopwatch()..start();
@@ -142,7 +171,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
 
     final uiTimerDown = Timer.periodic(const Duration(milliseconds: 150), (_) {
       double sec = swDown.elapsedMilliseconds / 1000.0;
-      if (sec > 0.2 && mounted && runDown) {
+      if (sec > 0.2 && mounted && runDown && !aborted) {
         setState(() {
           down = (bytesDown * 8) / (sec * 1000000);
           gauge = (down / 250.0).clamp(0.0, 1.0);
@@ -152,13 +181,13 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
 
     Future<void> downloadWorker() async {
       final ioClient = HttpClient();
-      while (runDown && mounted) {
+      while (runDown && mounted && !aborted) {
         try {
           final req = await ioClient.getUrl(Uri.parse('https://cloudflare.com'));
           req.headers.set('Origin', 'https://cloudflare.com');
           final res = await req.close();
           await for (var chunk in res) {
-            if (!runDown || !mounted) break;
+            if (!runDown || !mounted || aborted) break;
             bytesDown += chunk.length;
           }
         } catch (_) {
@@ -169,14 +198,18 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     }
 
     final downFutures = List.generate(6, (_) => downloadWorker());
-    await Future.delayed(const Duration(seconds: 6));
+    for (int i = 0; i < 60; i++) {
+      if (aborted) break;
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
     runDown = false;
     uiTimerDown.cancel();
     await Future.wait(downFutures);
 
-    if (!mounted) return;
+    if (aborted || !mounted) { guardTimer.cancel(); return; }
     setState(() { phase = "Testing Upload Speed"; gauge = 0.0; });
-    await Future.delayed(const Duration(milliseconds: 400));
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (aborted || !mounted) { guardTimer.cancel(); return; }
 
     final swUp = Stopwatch()..start();
     int bytesUp = 0;
@@ -185,7 +218,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
 
     final uiTimerUp = Timer.periodic(const Duration(milliseconds: 150), (_) {
       double sec = swUp.elapsedMilliseconds / 1000.0;
-      if (sec > 0.2 && mounted && runUp) {
+      if (sec > 0.2 && mounted && runUp && !aborted) {
         setState(() {
           up = (bytesUp * 8) / (sec * 1000000);
           gauge = (up / 150.0).clamp(0.0, 1.0);
@@ -195,14 +228,14 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
 
     Future<void> uploadWorker() async {
       final ioClient = HttpClient();
-      while (runUp && mounted) {
+      while (runUp && mounted && !aborted) {
         try {
           final req = await ioClient.postUrl(Uri.parse('https://cloudflare.com/__up'));
           req.headers.set('Origin', 'https://cloudflare.com');
           req.headers.set('Content-Type', 'application/octet-stream');
           req.contentLength = chunk64k.length * 16;
           for (int i = 0; i < 16; i++) {
-            if (!runUp || !mounted) break;
+            if (!runUp || !mounted || aborted) break;
             req.add(chunk64k);
             await req.flush();
             bytesUp += chunk64k.length;
@@ -217,14 +250,17 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     }
 
     final upFutures = List.generate(6, (_) => uploadWorker());
-    await Future.delayed(const Duration(seconds: 6));
+    for (int i = 0; i < 60; i++) {
+      if (aborted) break;
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
     runUp = false;
     uiTimerUp.cancel();
     await Future.wait(upFutures);
 
-    if (mounted) {
+    guardTimer.cancel();
+    if (!aborted && mounted) {
       setState(() { isTesting = false; phase = "COMPLETED"; gauge = 0.0; });
-      detectNetwork();
     }
   }
   Widget statCol(String label, String val, Color col) => Column(children: [
@@ -326,14 +362,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20)),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(activeNetwork == "Wi-Fi" ? Icons.wifi : Icons.cell_tower, size: 14, color: const Color(0xffa366ff)),
-                  const SizedBox(width: 6),
-                  Text("Connection: $activeNetwork", style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
-                ],
-              ),
+              child: Text("Mode: $selectedMode", style: const TextStyle(fontSize: 12, color: Colors.white70, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(height: 24),
             Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
@@ -363,7 +392,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
               ],
             ),
             const SizedBox(height: 30),
-            Text(phase, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white54)),
+            Text(phase, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: phase == "Connection Disconnected" ? Colors.redAccent : Colors.white54)),
             const Spacer(),
             SizedBox(
               width: double.infinity,
