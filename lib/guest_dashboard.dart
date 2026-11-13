@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:android_intent_plus/android_intent.dart';
 
 class GuestDashboardScreen extends StatefulWidget {
@@ -13,6 +12,7 @@ class GuestDashboardScreen extends StatefulWidget {
 
 class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
   bool isTesting = false;
+  bool showGuestLockNotice = false;
   String phase = "READY", netLabel = "Current Network";
   int ping = 0;
   double down = 0.0, up = 0.0, gauge = 0.0;
@@ -60,25 +60,43 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
       ),
     );
   }
-
   void runTest() async {
     setState(() { isTesting = true; phase = "Testing Ping"; ping = 0; down = 0.0; up = 0.0; gauge = 0.05; });
 
-    final swPing = Stopwatch()..start();
-    try {
-      await http.get(Uri.parse('https://cloudflare.com')).timeout(const Duration(seconds: 3));
-      if (mounted) setState(() => ping = swPing.elapsedMilliseconds);
-    } catch (_) {}
+    int bestPing = 9999;
+    Future<void> pingWorker() async {
+      final client = HttpClient();
+      try {
+        final warmReq = await client.getUrl(Uri.parse('https://cloudflare.com'));
+        final warmRes = await warmReq.close();
+        await warmRes.drain();
+
+        for (int i = 0; i < 3; i++) {
+          if (!mounted) break;
+          final sw = Stopwatch()..start();
+          final req = await client.getUrl(Uri.parse('https://cloudflare.com'));
+          final res = await req.close();
+          await res.drain();
+          sw.stop();
+          int ms = sw.elapsedMilliseconds;
+          if (ms > 0 && ms < bestPing) {
+            bestPing = ms;
+            if (mounted) setState(() => ping = bestPing);
+          }
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+      } catch (_) {}
+      client.close(force: true);
+    }
+    await Future.wait(List.generate(6, (_) => pingWorker()));
 
     await Future.delayed(const Duration(milliseconds: 400));
     if (!mounted) return;
     setState(() => phase = "Testing Download Speed");
 
-    // 4 Parallel Download Streams for 6 seconds
     final swDown = Stopwatch()..start();
     int bytesDown = 0;
     bool runDown = true;
-    final clients = List.generate(4, (_) => http.Client());
 
     final uiTimerDown = Timer.periodic(const Duration(milliseconds: 150), (_) {
       double sec = swDown.elapsedMilliseconds / 1000.0;
@@ -90,11 +108,14 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
       }
     });
 
-    Future<void> downloadWorker(http.Client client) async {
+    Future<void> downloadWorker() async {
+      final ioClient = HttpClient();
       while (runDown && mounted) {
         try {
-          final res = await client.send(http.Request('GET', Uri.parse('https://cloudflare.com00000000')));
-          await for (var chunk in res.stream) {
+          final req = await ioClient.getUrl(Uri.parse('https://cloudflare.com'));
+          req.headers.set('Origin', 'https://cloudflare.com');
+          final res = await req.close();
+          await for (var chunk in res) {
             if (!runDown || !mounted) break;
             bytesDown += chunk.length;
           }
@@ -102,20 +123,19 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
           await Future.delayed(const Duration(milliseconds: 100));
         }
       }
+      ioClient.close(force: true);
     }
 
-    final downFutures = clients.map((c) => downloadWorker(c)).toList();
+    final downFutures = List.generate(6, (_) => downloadWorker());
     await Future.delayed(const Duration(seconds: 6));
     runDown = false;
     uiTimerDown.cancel();
-    for (var c in clients) { c.close(); }
     await Future.wait(downFutures);
 
     if (!mounted) return;
     setState(() { phase = "Testing Upload Speed"; gauge = 0.0; });
     await Future.delayed(const Duration(milliseconds: 400));
 
-    // 3 Parallel Native Socket Upload Streams for 6 seconds
     final swUp = Stopwatch()..start();
     int bytesUp = 0;
     bool runUp = true;
@@ -135,10 +155,10 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
       final ioClient = HttpClient();
       while (runUp && mounted) {
         try {
-          final req = await ioClient.postUrl(Uri.parse('https://cloudflare.com'));
+          final req = await ioClient.postUrl(Uri.parse('https://cloudflare.com/__up'));
           req.headers.set('Origin', 'https://cloudflare.com');
           req.headers.set('Content-Type', 'application/octet-stream');
-          req.contentLength = chunk64k.length * 16; // 1 MB per request
+          req.contentLength = chunk64k.length * 16;
           for (int i = 0; i < 16; i++) {
             if (!runUp || !mounted) break;
             req.add(chunk64k);
@@ -154,7 +174,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
       ioClient.close(force: true);
     }
 
-    final upFutures = List.generate(3, (_) => uploadWorker());
+    final upFutures = List.generate(6, (_) => uploadWorker());
     await Future.delayed(const Duration(seconds: 6));
     runUp = false;
     uiTimerUp.cancel();
@@ -164,7 +184,6 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
       setState(() { isTesting = false; phase = "COMPLETED"; gauge = 0.0; });
     }
   }
-
   Widget statCol(String label, String val, Color col) => Column(children: [
         Text(label, style: const TextStyle(fontSize: 11, color: Colors.white38, fontWeight: FontWeight.bold)),
         const SizedBox(height: 4),
@@ -182,16 +201,85 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
         centerTitle: true,
         leading: const Icon(Icons.person_outline, color: Colors.white54),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.white70),
-            onPressed: () => Navigator.pushReplacementNamed(context, 'login'),
+          Builder(
+            builder: (ctx) => IconButton(
+              icon: const Icon(Icons.menu, color: Colors.white),
+              onPressed: () => Scaffold.of(ctx).openEndDrawer(),
+            ),
           ),
         ],
+      ),
+      endDrawer: Drawer(
+        backgroundColor: const Color(0xff1e1e1e),
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                color: const Color(0xff4c1a80),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.person_outline, color: Colors.white, size: 36),
+                    SizedBox(height: 10),
+                    Text('Guest Mode', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                    Text('Sign in to unlock security tools', style: TextStyle(fontSize: 12, color: Colors.white70)),
+                  ],
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.lock_outline, color: Colors.amberAccent),
+                title: const Text('Threat Protection', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: const Text('Members Only', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+                onTap: () {
+                  Navigator.pop(context);
+                  setState(() => showGuestLockNotice = true);
+                },
+              ),
+              const Spacer(),
+              const Divider(color: Colors.white12),
+              ListTile(
+                leading: const Icon(Icons.login, color: Color(0xffa366ff)),
+                title: const Text('Sign In / Exit Guest', style: TextStyle(color: Color(0xffa366ff), fontWeight: FontWeight.bold)),
+                onTap: () => Navigator.pushReplacementNamed(context, 'login'),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
+            if (showGuestLockNotice)
+              Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.amberAccent.withOpacity(0.15),
+                  border: Border.all(color: Colors.amberAccent, width: 1.5),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.lock_person, color: Colors.amberAccent, size: 26),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'You need a Google Account to use Threat Protection.',
+                        style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 18, color: Colors.white54),
+                      onPressed: () => setState(() => showGuestLockNotice = false),
+                    ),
+                  ],
+                ),
+              ),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20)),
