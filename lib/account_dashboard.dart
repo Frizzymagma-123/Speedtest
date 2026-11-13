@@ -17,14 +17,82 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
   bool threatProtectionEnabled = true;
   bool isScanningThreat = false;
   String? threatAlertMessage;
-  String phase = "READY", netLabel = "Current Network";
+  String phase = "READY";
+  String forcedMode = "AUTO"; // "AUTO", "WIFI", "MOBILE"
+  String activeBadge = "Checking...";
+  InternetAddress? boundLocalIp;
   int ping = 0;
   double down = 0.0, up = 0.0, gauge = 0.0;
+  Timer? _netWatchTimer;
 
   @override
   void initState() {
     super.initState();
-    runRealThreatCheck();
+    resolveNetworkBinding().then((_) => runRealThreatCheck());
+    _netWatchTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!isTesting) resolveNetworkBinding();
+    });
+  }
+
+  @override
+  void dispose() {
+    _netWatchTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> resolveNetworkBinding() async {
+    try {
+      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      InternetAddress? wifiIp;
+      InternetAddress? cellIp;
+
+      for (var iface in interfaces) {
+        final name = iface.name.toLowerCase();
+        if (iface.addresses.isEmpty) continue;
+        if (name.contains('wlan') || name.contains('wifi')) {
+          wifiIp = iface.addresses.first;
+        } else if (name.contains('rmnet') || name.contains('ccmni') || name.contains('pdp') || name.contains('wwan')) {
+          cellIp = iface.addresses.first;
+        }
+      }
+
+      InternetAddress? targetIp;
+      String label = "Offline";
+
+      if (forcedMode == "WIFI") {
+        targetIp = wifiIp;
+        label = wifiIp != null ? "Wi-Fi Only (Locked)" : "Wi-Fi Disconnected";
+      } else if (forcedMode == "MOBILE") {
+        targetIp = cellIp;
+        label = cellIp != null ? "Mobile Data Only (Locked)" : "Mobile Data Off";
+      } else {
+        if (wifiIp != null) {
+          targetIp = wifiIp;
+          label = "Wi-Fi (Auto)";
+        } else if (cellIp != null) {
+          targetIp = cellIp;
+          label = "Mobile Data (Auto)";
+        }
+      }
+
+      if (mounted && (activeBadge != label || boundLocalIp != targetIp)) {
+        setState(() {
+          boundLocalIp = targetIp;
+          activeBadge = label;
+        });
+      }
+    } catch (_) {}
+  }
+
+  HttpClient createBoundHttpClient() {
+    final client = HttpClient();
+    final ip = boundLocalIp;
+    if (ip != null) {
+      client.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) {
+        return Socket.startConnect(uri.host, uri.port, sourceAddress: ip);
+      };
+    }
+    return client;
   }
 
   Future<void> runRealThreatCheck() async {
@@ -35,32 +103,39 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
     if (mounted) setState(() => isScanningThreat = true);
     String? detectedIssue;
 
-    final client = HttpClient();
+    // 1. Real DNS Hijack Check (Detects local router/hotspot DNS spoofing)
     try {
-      final req = await client.getUrl(Uri.parse('http://gstatic.com')).timeout(const Duration(seconds: 4));
-      req.followRedirects = false;
-      final res = await req.close();
-      await res.drain();
-      if (res.statusCode != 204) {
-        detectedIssue = "Warning: Network interception or captive portal detected (HTTP ${res.statusCode}). Avoid entering passwords.";
+      final addresses = await InternetAddress.lookup('cloudflare.com').timeout(const Duration(seconds: 4));
+      if (addresses.isEmpty) {
+        detectedIssue = "Warning: DNS lookup failed. Possible DNS tampering or offline route.";
+      } else {
+        final ip = addresses.first.address;
+        if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('127.')) {
+          detectedIssue = "Security Alert: DNS Spoofing detected! Traffic is being redirected to a local address ($ip).";
+        }
       }
     } catch (_) {
-      detectedIssue = "Warning: Unable to verify clean internet route. Possible DNS block or unstable network.";
-    } finally {
-      client.close(force: true);
+      detectedIssue = "Warning: Unable to verify DNS integrity on this connection.";
     }
 
+    // 2. Real Encrypted HTTPS & SSL Certificate Check (Eliminates Carrier HTTP 302 False Alarms)
     if (detectedIssue == null) {
+      final client = createBoundHttpClient();
       try {
-        final socket = await SecureSocket.connect('cloudflare.com', 443, timeout: const Duration(seconds: 4));
-        final cert = socket.peerCertificate;
-        if (cert == null || (!cert.issuer.contains('Cloudflare') && !cert.issuer.contains('DigiCert') && !cert.issuer.contains('Google'))) {
-          detectedIssue = "Security Alert: Untrusted SSL certificate issuer detected (${cert?.issuer ?? 'Unknown'}). Traffic may be monitored.";
+        final req = await client.getUrl(Uri.parse('https://google.com')).timeout(const Duration(seconds: 4));
+        req.followRedirects = false;
+        final res = await req.close();
+        await res.drain();
+        if (res.statusCode != 204 && res.statusCode != 200) {
+          detectedIssue = "Warning: Captive portal or proxy interception detected (Status ${res.statusCode}). Avoid sensitive logins.";
         }
-        await socket.close();
       } on HandshakeException {
-        detectedIssue = "Critical Alert: SSL/TLS handshake failed! Potential Man-in-the-Middle attack on this Wi-Fi.";
-      } catch (_) {}
+        detectedIssue = "Critical Alert: SSL/TLS certificate mismatch! Potential Man-in-the-Middle attack on this network.";
+      } catch (_) {
+        detectedIssue = "Warning: Encrypted connection interrupted. Potential firewall block or unstable network.";
+      } finally {
+        client.close(force: true);
+      }
     }
 
     if (mounted) {
@@ -70,16 +145,6 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
       });
     }
   }
-
-  void openSettings(String action, String label) async {
-    setState(() => netLabel = label);
-    if (Platform.isAndroid) {
-      await AndroidIntent(action: action).launch();
-    }
-    await Future.delayed(const Duration(seconds: 2));
-    runRealThreatCheck();
-  }
-
   void showNetMenu() {
     showModalBottomSheet(
       context: context,
@@ -90,39 +155,68 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Switch Connection to Test', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Select Network Route', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff4c1a80), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
               icon: const Icon(Icons.wifi),
-              label: const Text('Switch Wi-Fi Network'),
-              onPressed: () {
+              label: const Text('Wi-Fi Only (Ignore Mobile Data)'),
+              onPressed: () async {
                 Navigator.pop(context);
-                openSettings('android.settings.WIFI_SETTINGS', 'Wi-Fi Test');
+                setState(() => forcedMode = "WIFI");
+                await resolveNetworkBinding();
+                if (boundLocalIp == null && Platform.isAndroid) {
+                  await AndroidIntent(action: 'android.settings.WIFI_SETTINGS').launch();
+                } else {
+                  runRealThreatCheck();
+                }
               },
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff333333), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff6a1b9a), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
               icon: const Icon(Icons.cell_tower),
-              label: const Text('Switch to Mobile Data'),
-              onPressed: () {
+              label: const Text('Mobile Data Only (Ignore Wi-Fi)'),
+              onPressed: () async {
                 Navigator.pop(context);
-                openSettings('android.settings.DATA_ROAMING_SETTINGS', 'Mobile Data Test');
+                setState(() => forcedMode = "MOBILE");
+                await resolveNetworkBinding();
+                if (boundLocalIp == null && Platform.isAndroid) {
+                  await AndroidIntent(action: 'android.settings.DATA_ROAMING_SETTINGS').launch();
+                } else {
+                  runRealThreatCheck();
+                }
               },
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                setState(() => forcedMode = "AUTO");
+                await resolveNetworkBinding();
+                runRealThreatCheck();
+              },
+              child: const Text('Auto-Detect Default Network', style: TextStyle(color: Colors.white70)),
             ),
           ],
         ),
       ),
     );
   }
+
   void runTest() async {
+    await resolveNetworkBinding();
+    if (forcedMode != "AUTO" && boundLocalIp == null) {
+      setState(() => phase = "Enable ${forcedMode == 'WIFI' ? 'Wi-Fi' : 'Mobile Data'} first!");
+      return;
+    }
+
     if (threatProtectionEnabled) runRealThreatCheck();
     setState(() { isTesting = true; phase = "Testing Ping"; ping = 0; down = 0.0; up = 0.0; gauge = 0.05; });
 
     int bestPing = 9999;
     Future<void> pingWorker() async {
-      final client = HttpClient();
+      final client = createBoundHttpClient();
       try {
         final warmReq = await client.getUrl(Uri.parse('https://cloudflare.com'));
         final warmRes = await warmReq.close();
@@ -166,7 +260,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
     });
 
     Future<void> downloadWorker() async {
-      final ioClient = HttpClient();
+      final ioClient = createBoundHttpClient();
       while (runDown && mounted) {
         try {
           final req = await ioClient.getUrl(Uri.parse('https://cloudflare.com'));
@@ -209,7 +303,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
     });
 
     Future<void> uploadWorker() async {
-      final ioClient = HttpClient();
+      final ioClient = createBoundHttpClient();
       while (runUp && mounted) {
         try {
           final req = await ioClient.postUrl(Uri.parse('https://cloudflare.com/__up'));
@@ -239,6 +333,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
 
     if (mounted) {
       setState(() { isTesting = false; phase = "COMPLETED"; gauge = 0.0; });
+      resolveNetworkBinding();
     }
   }
   Widget statCol(String label, String val, Color col) => Column(children: [
@@ -290,7 +385,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
                 activeColor: const Color(0xffa366ff),
                 secondary: Icon(threatProtectionEnabled ? Icons.gpp_good : Icons.gpp_maybe, color: threatProtectionEnabled ? Colors.greenAccent : Colors.white54),
                 title: const Text('Threat Protection', style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text(threatProtectionEnabled ? 'Enabled (Live SSL & DNS check)' : 'Disabled', style: const TextStyle(fontSize: 12, color: Colors.white54)),
+                subtitle: Text(threatProtectionEnabled ? 'Enabled (HTTPS & DNS Guard)' : 'Disabled', style: const TextStyle(fontSize: 12, color: Colors.white54)),
                 value: threatProtectionEnabled,
                 onChanged: (val) {
                   setState(() => threatProtectionEnabled = val);
@@ -354,7 +449,14 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                   decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20)),
-                  child: Text("Mode: $netLabel", style: const TextStyle(fontSize: 12, color: Colors.white70, fontWeight: FontWeight.bold)),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(activeBadge.contains("Wi-Fi") ? Icons.wifi : Icons.cell_tower, size: 14, color: const Color(0xffa366ff)),
+                      const SizedBox(width: 6),
+                      Text("Mode: $activeBadge", style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
                 ),
                 if (threatProtectionEnabled) ...[
                   const SizedBox(width: 8),
