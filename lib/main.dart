@@ -9,53 +9,66 @@ import 'account_dashboard.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  runApp(const SpeedtestApp());
+  runApp(const MyCustomSpeedtestApp());
 }
 
-class SpeedtestApp extends StatelessWidget {
-  const SpeedtestApp({super.key});
+class MyCustomSpeedtestApp extends StatelessWidget {
+  const MyCustomSpeedtestApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Speedtest',
+      title: 'Speedtest App',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xff1a1a1a),
-        colorScheme: const ColorScheme.dark(
-          primary: Color(0xff4c1a80),
-          secondary: Color(0xffa366ff),
-        ),
       ),
       initialRoute: 'loading',
       routes: {
-        'loading': (_) => const LoadingScreen(),
-        'login': (_) => const LoginScreen(),
-        'guest_dashboard': (_) => const GuestDashboardScreen(),
-        'account_dashboard': (_) => const AccountDashboardScreen(),
+        'loading': (context) => const LoadingScreen(),
+        'login': (context) => const LoginScreen(),
+        'guest_dashboard': (context) => const GuestDashboardScreen(),
+        'account_dashboard': (context) => const AccountDashboardScreen(),
       },
     );
   }
 }
 
-Widget purpleScreen(List<Widget> children) {
-  return Scaffold(
-    body: Container(
-      width: double.infinity,
-      height: double.infinity,
-      color: const Color(0xff4c1a80),
-      padding: const EdgeInsets.all(32),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: children,
+class PurpleLayout extends StatelessWidget {
+  final List<Widget> children;
+  final double padding;
+
+  const PurpleLayout({
+    super.key,
+    required this.children,
+    this.padding = 40.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          color: Color(0xff4c1a80),
+        ),
+        child: Padding(
+          padding: EdgeInsets.all(padding),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: children,
+          ),
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class LoadingScreen extends StatefulWidget {
   const LoadingScreen({super.key});
+
   @override
   State<LoadingScreen> createState() => _LoadingScreenState();
 }
@@ -73,18 +86,26 @@ class _LoadingScreenState extends State<LoadingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return purpleScreen([
-      const Icon(Icons.speed, size: 80, color: Colors.white),
-      const SizedBox(height: 20),
-      const Text('Speedtest', textAlign: TextAlign.center, style: TextStyle(fontSize: 34, fontWeight: FontWeight.bold, color: Colors.white)),
-      const SizedBox(height: 10),
-      const Text('Loading...', textAlign: TextAlign.center, style: TextStyle(fontSize: 15, color: Colors.white70)),
-    ]);
+    return const PurpleLayout(
+      children: [
+        Center(
+          child: SizedBox(
+            width: 56,
+            height: 56,
+            child: CircularProgressIndicator(
+              color: Colors.white,
+              strokeWidth: 5,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
+
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
@@ -109,7 +130,9 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) Navigator.pushReplacementNamed(context, 'account_dashboard');
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sign-In failed: $e'), backgroundColor: Colors.redAccent));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sign-In failed: $e'), backgroundColor: Colors.redAccent),
+        );
       }
     } finally {
       if (mounted) setState(() => isLoading = false);
@@ -118,40 +141,58 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return purpleScreen([
-      const Icon(Icons.network_check, size: 75, color: Colors.white),
-      const SizedBox(height: 16),
-      const Text('Speedtest', textAlign: TextAlign.center, style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold, color: Colors.white)),
-      const SizedBox(height: 8),
-      const Text('Check your Wi-Fi and mobile network speed', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: Colors.white70)),
-      const SizedBox(height: 48),
-      if (isLoading)
-        const Center(child: CircularProgressIndicator(color: Colors.white))
-      else ...[
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.white,
-            foregroundColor: Colors.black87,
-            padding: const EdgeInsets.symmetric(vertical: 15),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-          icon: const Icon(Icons.login, color: Color(0xff4c1a80)),
-          label: const Text('Sign in with Google', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          onPressed: signInWithGoogle,
+    return PurpleLayout(
+      children: [
+        const Icon(Icons.speed, size: 80, color: Colors.white),
+        const SizedBox(height: 15),
+        const Text(
+          'Speedtest App',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
         ),
-        const SizedBox(height: 16),
-        OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Colors.white,
-            side: const BorderSide(color: Colors.white54, width: 1.5),
-            padding: const EdgeInsets.symmetric(vertical: 15),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-          icon: const Icon(Icons.person_outline),
-          label: const Text('Continue as Guest', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          onPressed: () => Navigator.pushReplacementNamed(context, 'guest_dashboard'),
+        const SizedBox(height: 8),
+        const Text(
+          'Tells your Internet Speed With More Features',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 14, color: Colors.white70),
         ),
+        const SizedBox(height: 50),
+        if (isLoading)
+          const Center(child: CircularProgressIndicator(color: Colors.white))
+        else ...[
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black87,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+            ),
+            icon: const Icon(Icons.account_circle, size: 24, color: Colors.redAccent),
+            onPressed: signInWithGoogle,
+            label: const Text(
+              'Sign in with Google Account',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: const BorderSide(color: Colors.white54, width: 1.5),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+            ),
+            icon: const Icon(Icons.person_outline, size: 22),
+            onPressed: () {
+              Navigator.pushReplacementNamed(context, 'guest_dashboard');
+            },
+            label: const Text(
+              'Continue as Guest',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+          ),
+        ],
       ],
-    ]);
+    );
   }
 }
