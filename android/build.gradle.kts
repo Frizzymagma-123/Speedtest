@@ -14,12 +14,8 @@ subprojects {
 }
 
 subprojects {
-    project.evaluationDependsOn(":app")
-}
-
-subprojects {
-    afterEvaluate {
-        if (project.hasProperty("android")) {
+    if (project.name != "app") {
+        plugins.withId("com.android.library") {
             val androidExt = project.extensions.findByName("android")
             if (androidExt != null) {
                 try {
@@ -29,6 +25,10 @@ subprojects {
             }
         }
     }
+}
+
+subprojects {
+    project.evaluationDependsOn(":app")
 }
 
 tasks.register<Delete>("clean") {
