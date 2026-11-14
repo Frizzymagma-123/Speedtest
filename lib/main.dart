@@ -1,101 +1,21 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:workmanager/workmanager.dart';
 import 'guest_dashboard.dart';
 import 'account_dashboard.dart';
 
-const String bgThreatTaskName = "periodicThreatProtectionScan";
+bool firebaseReady = false;
 
-@pragma('vm:entry-point')
-void callbackDispatcher() {
-  Workmanager().executeTask((task, inputData) async {
-    try {
-      await Firebase.initializeApp();
-      if (FirebaseAuth.instance.currentUser == null) {
-        return Future.value(true);
-      }
-
-      String? detectedIssue;
-      try {
-        final addresses = await InternetAddress.lookup('cloudflare.com').timeout(const Duration(seconds: 4));
-        if (addresses.isNotEmpty) {
-          final ip = addresses.first.address;
-          if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('127.')) {
-            detectedIssue = "Security Alert: DNS spoofing detected ($ip). Avoid entering passwords.";
-          }
-        }
-      } catch (_) {}
-
-      if (detectedIssue == null) {
-        final client = HttpClient();
-        try {
-          final req = await client.getUrl(Uri.parse('https://cloudflare.com')).timeout(const Duration(seconds: 4));
-          req.followRedirects = false;
-          final res = await req.close();
-          await res.drain();
-          if (res.statusCode != 200 && res.statusCode != 204 && res.statusCode != 301 && res.statusCode != 302) {
-            detectedIssue = "Warning: Captive portal or proxy interception detected (Status ${res.statusCode}).";
-          }
-        } on HandshakeException {
-          detectedIssue = "Critical Alert: SSL certificate mismatch! Potential Man-in-the-Middle attack.";
-        } catch (_) {} finally {
-          client.close(force: true);
-        }
-      }
-
-      if (detectedIssue != null) {
-        final notifications = FlutterLocalNotificationsPlugin();
-        const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-        await notifications.initialize(const InitializationSettings(android: androidInit));
-        const androidDetails = AndroidNotificationDetails(
-          'threat_protection_channel',
-          'Threat Protection Alerts',
-          channelDescription: 'Alerts when a network attack or hijack is detected',
-          importance: Importance.max,
-          priority: Priority.high,
-          icon: '@mipmap/ic_launcher',
-        );
-        await notifications.show(
-          1002,
-          'Security Alert: Network Threat Detected',
-          detectedIssue,
-          const NotificationDetails(android: androidDetails),
-        );
-      }
-    } catch (_) {}
-    return Future.value(true);
-  });
-}
-
-Future<void> startBackgroundThreatGuard() async {
-  final notifications = FlutterLocalNotificationsPlugin();
-  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-  await notifications.initialize(const InitializationSettings(android: androidInit));
-  await notifications
-      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-      ?.requestNotificationsPermission();
-
-  await Workmanager().registerPeriodicTask(
-    bgThreatTaskName,
-    bgThreatTaskName,
-    frequency: const Duration(minutes: 15),
-    existingWorkPolicy: ExistingWorkPolicy.keep,
-    constraints: Constraints(networkType: NetworkType.connected),
-  );
-}
-
-Future<void> stopBackgroundThreatGuard() async {
-  await Workmanager().cancelByUniqueName(bgThreatTaskName);
-}
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  await Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
+  try {
+    await Firebase.initializeApp();
+    firebaseReady = true;
+  } catch (_) {
+    firebaseReady = false;
+  }
   runApp(const MyCustomSpeedtestApp());
 }
 
@@ -153,7 +73,6 @@ class PurpleLayout extends StatelessWidget {
     );
   }
 }
-
 class LoadingScreen extends StatefulWidget {
   const LoadingScreen({super.key});
 
@@ -165,15 +84,15 @@ class _LoadingScreenState extends State<LoadingScreen> {
   @override
   void initState() {
     super.initState();
-    Future.delayed(const Duration(seconds: 2), () async {
+    Future.delayed(const Duration(seconds: 2), () {
       if (!mounted) return;
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        await startBackgroundThreatGuard();
-        if (mounted) Navigator.pushReplacementNamed(context, 'member_home');
-      } else {
-        Navigator.pushReplacementNamed(context, 'login');
+      User? user;
+      if (firebaseReady) {
+        try {
+          user = FirebaseAuth.instance.currentUser;
+        } catch (_) {}
       }
+      Navigator.pushReplacementNamed(context, user != null ? 'member_home' : 'login');
     });
   }
 
@@ -208,6 +127,7 @@ class _LoadingScreenState extends State<LoadingScreen> {
     );
   }
 }
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -219,6 +139,16 @@ class _LoginScreenState extends State<LoginScreen> {
   bool isLoading = false;
 
   Future<void> signInWithGoogle() async {
+    if (!firebaseReady) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Google Sign-In requires Google Play Services. Use Guest Mode on Fire OS.'),
+          backgroundColor: Colors.orangeAccent,
+        ),
+      );
+      return;
+    }
+
     setState(() => isLoading = true);
     try {
       final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
@@ -232,12 +162,14 @@ class _LoginScreenState extends State<LoginScreen> {
         idToken: googleAuth.idToken,
       );
       await FirebaseAuth.instance.signInWithCredential(credential);
-      await startBackgroundThreatGuard();
       if (mounted) Navigator.pushReplacementNamed(context, 'member_home');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sign-In failed: $e'), backgroundColor: Colors.redAccent),
+          const SnackBar(
+            content: Text('Google Sign-In unavailable on this device. Please continue as Guest.'),
+            backgroundColor: Colors.redAccent,
+          ),
         );
       }
     } finally {
@@ -302,13 +234,17 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
-
 class MemberHomeScreen extends StatelessWidget {
   const MemberHomeScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
+    User? user;
+    if (firebaseReady) {
+      try {
+        user = FirebaseAuth.instance.currentUser;
+      } catch (_) {}
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xff4c1a80),
@@ -333,9 +269,10 @@ class MemberHomeScreen extends StatelessWidget {
               icon: const Icon(Icons.logout, size: 18, color: Colors.white),
               label: const Text('Log Out', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
               onPressed: () async {
-                await stopBackgroundThreatGuard();
-                await GoogleSignIn().signOut();
-                await FirebaseAuth.instance.signOut();
+                try {
+                  await GoogleSignIn().signOut();
+                  await FirebaseAuth.instance.signOut();
+                } catch (_) {}
                 if (context.mounted) {
                   Navigator.pushReplacementNamed(context, 'login');
                 }
