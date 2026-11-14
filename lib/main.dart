@@ -1,13 +1,134 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'guest_dashboard.dart';
 import 'account_dashboard.dart';
 
 bool firebaseReady = false;
 
+Future<void> _performBackgroundThreatScan(FlutterLocalNotificationsPlugin notifications) async {
+  String? detectedIssue;
+
+  try {
+    final addresses = await InternetAddress.lookup('cloudflare.com').timeout(const Duration(seconds: 4));
+    if (addresses.isNotEmpty) {
+      final ip = addresses.first.address;
+      if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('127.')) {
+        detectedIssue = "Security Alert: DNS spoofing detected ($ip). Avoid entering passwords.";
+      }
+    }
+  } catch (_) {}
+
+  if (detectedIssue == null) {
+    final client = HttpClient();
+    try {
+      final req = await client.getUrl(Uri.parse('https://cloudflare.com')).timeout(const Duration(seconds: 4));
+      req.followRedirects = false;
+      final res = await req.close();
+      await res.drain();
+      if (res.statusCode != 200 && res.statusCode != 204 && res.statusCode != 301 && res.statusCode != 302) {
+        detectedIssue = "Warning: Captive portal or proxy interception detected (Status ${res.statusCode}).";
+      }
+    } on HandshakeException {
+      detectedIssue = "Critical Alert: SSL certificate mismatch! Potential Man-in-the-Middle attack.";
+    } catch (_) {} finally {
+      client.close(force: true);
+    }
+  }
+
+  if (detectedIssue != null) {
+    const alertDetails = AndroidNotificationDetails(
+      'threat_protection_channel',
+      'Threat Protection Alerts',
+      channelDescription: 'Alerts when a network attack or hijack is detected',
+      importance: Importance.max,
+      priority: Priority.high,
+      icon: '@mipmap/ic_launcher',
+    );
+    await notifications.show(
+      1002,
+      'Security Alert: Network Threat Detected',
+      detectedIssue,
+      const NotificationDetails(android: alertDetails),
+    );
+  }
+}
+
+@pragma('vm:entry-point')
+void onStart(ServiceInstance service) async {
+  DartPluginRegistrant.ensureInitialized();
+
+  final notifications = FlutterLocalNotificationsPlugin();
+  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+  await notifications.initialize(const InitializationSettings(android: androidInit));
+
+  service.on('stopService').listen((event) {
+    service.stopSelf();
+  });
+
+  await _performBackgroundThreatScan(notifications);
+
+  Timer.periodic(const Duration(minutes: 5), (timer) async {
+    await _performBackgroundThreatScan(notifications);
+  });
+}
+
+Future<void> initBackgroundService() async {
+  final service = FlutterBackgroundService();
+  final notifications = FlutterLocalNotificationsPlugin();
+
+  const channel = AndroidNotificationChannel(
+    'threat_guard_foreground',
+    'Threat Protection Background Guard',
+    description: 'Keeps 5-minute network Threat Protection active',
+    importance: Importance.min,
+    playSound: false,
+    enableVibration: false,
+    showBadge: false,
+  );
+
+  await notifications
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onStart,
+      autoStart: false,
+      isForegroundMode: true,
+      notificationChannelId: 'threat_guard_foreground',
+      initialNotificationTitle: 'Speedtest Threat Protection',
+      initialNotificationContent: 'Monitoring network every 5 minutes',
+      foregroundServiceNotificationId: 888,
+    ),
+    iosConfiguration: IosConfiguration(autoStart: false),
+  );
+}
+
+Future<void> startBackgroundThreatGuard() async {
+  final notifications = FlutterLocalNotificationsPlugin();
+  await notifications
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.requestNotificationsPermission();
+
+  final service = FlutterBackgroundService();
+  if (!(await service.isRunning())) {
+    await service.startService();
+  }
+}
+
+Future<void> stopBackgroundThreatGuard() async {
+  final service = FlutterBackgroundService();
+  if (await service.isRunning()) {
+    service.invoke('stopService');
+  }
+}
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
@@ -16,6 +137,9 @@ void main() async {
   } catch (_) {
     firebaseReady = false;
   }
+  try {
+    await initBackgroundService();
+  } catch (_) {}
   runApp(const MyCustomSpeedtestApp());
 }
 
@@ -73,6 +197,7 @@ class PurpleLayout extends StatelessWidget {
     );
   }
 }
+
 class LoadingScreen extends StatefulWidget {
   const LoadingScreen({super.key});
 
@@ -84,7 +209,7 @@ class _LoadingScreenState extends State<LoadingScreen> {
   @override
   void initState() {
     super.initState();
-    Future.delayed(const Duration(seconds: 2), () {
+    Future.delayed(const Duration(seconds: 2), () async {
       if (!mounted) return;
       User? user;
       if (firebaseReady) {
@@ -92,7 +217,14 @@ class _LoadingScreenState extends State<LoadingScreen> {
           user = FirebaseAuth.instance.currentUser;
         } catch (_) {}
       }
-      Navigator.pushReplacementNamed(context, user != null ? 'member_home' : 'login');
+      if (user != null) {
+        try {
+          await startBackgroundThreatGuard();
+        } catch (_) {}
+        if (mounted) Navigator.pushReplacementNamed(context, 'member_home');
+      } else {
+        Navigator.pushReplacementNamed(context, 'login');
+      }
     });
   }
 
@@ -127,7 +259,6 @@ class _LoadingScreenState extends State<LoadingScreen> {
     );
   }
 }
-
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -162,6 +293,9 @@ class _LoginScreenState extends State<LoginScreen> {
         idToken: googleAuth.idToken,
       );
       await FirebaseAuth.instance.signInWithCredential(credential);
+      try {
+        await startBackgroundThreatGuard();
+      } catch (_) {}
       if (mounted) Navigator.pushReplacementNamed(context, 'member_home');
     } catch (e) {
       if (mounted) {
@@ -234,6 +368,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
+
 class MemberHomeScreen extends StatelessWidget {
   const MemberHomeScreen({super.key});
 
@@ -270,6 +405,7 @@ class MemberHomeScreen extends StatelessWidget {
               label: const Text('Log Out', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
               onPressed: () async {
                 try {
+                  await stopBackgroundThreatGuard();
                   await GoogleSignIn().signOut();
                   await FirebaseAuth.instance.signOut();
                 } catch (_) {}
@@ -309,7 +445,7 @@ class MemberHomeScreen extends StatelessWidget {
                     Icon(Icons.verified_user, size: 16, color: Colors.greenAccent),
                     SizedBox(width: 6),
                     Text(
-                      'Threat Protection Always Active',
+                      'Threat Protection Always Active (5m)',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.greenAccent),
                     ),
                   ],
