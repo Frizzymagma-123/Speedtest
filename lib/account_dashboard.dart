@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
@@ -68,7 +67,6 @@ class AccountDashboardScreen extends StatefulWidget {
 
 class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
   bool isTesting = false;
-  bool threatProtectionEnabled = true;
   bool isScanningThreat = false;
   String? threatAlertMessage;
   String phase = "READY";
@@ -98,15 +96,12 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
   Future<void> _initNotifications() async {
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     await _notifications.initialize(const InitializationSettings(android: androidInit));
-    if (threatProtectionEnabled) {
-      await _notifications
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-          ?.requestNotificationsPermission();
-    }
+    await _notifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
   }
 
   Future<void> _sendThreatNotification(String alertBody) async {
-    if (!threatProtectionEnabled) return;
     const androidDetails = AndroidNotificationDetails(
       'threat_protection_channel',
       'Threat Protection Alerts',
@@ -144,15 +139,11 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
     final current = await getHardwareNetwork();
     if (mounted && current != "Disconnected" && selectedMode != current) {
       setState(() => selectedMode = current);
-      if (threatProtectionEnabled) runThreatCheck();
+      runThreatCheck();
     }
   }
 
   Future<void> runThreatCheck() async {
-    if (!threatProtectionEnabled) {
-      if (mounted) setState(() => threatAlertMessage = null);
-      return;
-    }
     if (mounted) setState(() => isScanningThreat = true);
     String? detectedIssue;
 
@@ -192,9 +183,9 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
     if (mounted) {
       setState(() {
         isScanningThreat = false;
-        threatAlertMessage = threatProtectionEnabled ? detectedIssue : null;
+        threatAlertMessage = detectedIssue;
       });
-      if (threatProtectionEnabled && detectedIssue != null) {
+      if (detectedIssue != null) {
         _sendThreatNotification(detectedIssue);
       }
     }
@@ -276,7 +267,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
       return;
     }
 
-    if (threatProtectionEnabled) runThreatCheck();
+    runThreatCheck();
     bool aborted = false;
     setState(() { isTesting = true; phase = "TESTING PING..."; ping = 0; down = 0.0; up = 0.0; gauge = 0.05; });
 
@@ -369,7 +360,8 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
     await Future.wait(downFutures);
 
     if (aborted || !mounted) { guardTimer.cancel(); return; }
-    setState(() { phase = "TESTING UPLOAD..."; gauge = 0.0; });
+    setState(() => phase = "TESTING UPLOAD...");
+    gauge = 0.0;
     await Future.delayed(const Duration(milliseconds: 300));
     if (aborted || !mounted) { guardTimer.cancel(); return; }
 
@@ -471,45 +463,31 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
                   ],
                 ),
               ),
-              SwitchListTile(
-                activeColor: const Color(0xffa366ff),
-                secondary: DefenderShieldLogo(
+              const ListTile(
+                leading: DefenderShieldLogo(
                   size: 26,
-                  primaryColor: threatProtectionEnabled ? Colors.greenAccent : Colors.white38,
-                  accentColor: threatProtectionEnabled ? const Color(0xffa366ff) : Colors.white24,
+                  primaryColor: Colors.greenAccent,
+                  accentColor: Color(0xffa366ff),
                 ),
-                title: const Text('Threat Protection', style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text(threatProtectionEnabled ? 'Enabled' : 'Disabled', style: const TextStyle(fontSize: 12, color: Colors.white54)),
-                value: threatProtectionEnabled,
-                onChanged: (val) {
-                  setState(() => threatProtectionEnabled = val);
-                  if (val) {
-                    _initNotifications();
-                    runThreatCheck();
-                  } else {
-                    setState(() => threatAlertMessage = null);
-                  }
-                },
+                title: Text('Threat Protection', style: TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text('Always On (Background Guard Active)', style: TextStyle(fontSize: 12, color: Colors.greenAccent)),
               ),
-              if (threatProtectionEnabled)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: TextButton.icon(
-                    icon: const Icon(Icons.refresh, size: 18, color: Color(0xffa366ff)),
-                    label: const Text('Scan Network Now', style: TextStyle(color: Color(0xffa366ff))),
-                    onPressed: isScanningThreat ? null : runThreatCheck,
-                  ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TextButton.icon(
+                  icon: const Icon(Icons.refresh, size: 18, color: Color(0xffa366ff)),
+                  label: const Text('Scan Network Now', style: TextStyle(color: Color(0xffa366ff))),
+                  onPressed: isScanningThreat ? null : runThreatCheck,
                 ),
+              ),
               const Spacer(),
               const Divider(color: Colors.white12),
               ListTile(
-                leading: const Icon(Icons.logout, color: Colors.redAccent),
-                title: const Text('Log Out', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                onTap: () async {
+                leading: const Icon(Icons.home_rounded, color: Color(0xffa366ff)),
+                title: const Text('Back to Home Screen', style: TextStyle(color: Color(0xffa366ff), fontWeight: FontWeight.bold)),
+                onTap: () {
                   Navigator.pop(context);
-                  await GoogleSignIn().signOut();
-                  await FirebaseAuth.instance.signOut();
-                  if (mounted) Navigator.pushReplacementNamed(context, 'login');
+                  Navigator.pushReplacementNamed(context, 'member_home');
                 },
               ),
               const SizedBox(height: 12),
@@ -521,7 +499,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
         padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
-            if (threatProtectionEnabled && threatAlertMessage != null)
+            if (threatAlertMessage != null)
               Container(
                 margin: const EdgeInsets.only(bottom: 16),
                 padding: const EdgeInsets.all(12),
@@ -546,27 +524,25 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
                   decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(20)),
                   child: Text("Mode: $selectedMode", style: const TextStyle(fontSize: 12, color: Colors.white70, fontWeight: FontWeight.bold)),
                 ),
-                if (threatProtectionEnabled) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: (threatAlertMessage == null ? Colors.green : Colors.red).withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      children: [
-                        DefenderShieldLogo(
-                          size: 14,
-                          primaryColor: threatAlertMessage == null ? Colors.greenAccent : Colors.redAccent,
-                          accentColor: threatAlertMessage == null ? Colors.white : Colors.amberAccent,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(isScanningThreat ? "Scanning..." : (threatAlertMessage == null ? "Protected" : "Risk"), style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: threatAlertMessage == null ? Colors.greenAccent : Colors.redAccent)),
-                      ],
-                    ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: (threatAlertMessage == null ? Colors.green : Colors.red).withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(20),
                   ),
-                ],
+                  child: Row(
+                    children: [
+                      DefenderShieldLogo(
+                        size: 14,
+                        primaryColor: threatAlertMessage == null ? Colors.greenAccent : Colors.redAccent,
+                        accentColor: threatAlertMessage == null ? Colors.white : Colors.amberAccent,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(isScanningThreat ? "Scanning..." : (threatAlertMessage == null ? "Protected" : "Risk"), style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: threatAlertMessage == null ? Colors.greenAccent : Colors.redAccent)),
+                    ],
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 24),
