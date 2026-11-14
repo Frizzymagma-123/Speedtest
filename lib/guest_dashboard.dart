@@ -62,6 +62,9 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xff262626),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (_) => Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -71,7 +74,12 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
             const Text('Switch Connection to Test', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff4c1a80), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xff4c1a80),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: const StadiumBorder(),
+              ),
               icon: const Icon(Icons.wifi),
               label: const Text('Switch to Wi-Fi'),
               onPressed: () async {
@@ -84,7 +92,12 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff333333), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xff333333),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: const StadiumBorder(),
+              ),
               icon: const Icon(Icons.cell_tower),
               label: const Text('Switch to Mobile Data'),
               onPressed: () async {
@@ -94,6 +107,12 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
                   await AndroidIntent(action: 'android.settings.WIFI_SETTINGS').launch();
                 }
               },
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Turn off Wi-Fi to check mobile data speed',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11, color: Colors.white54),
             ),
           ],
         ),
@@ -340,7 +359,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
                 decoration: BoxDecoration(
                   color: Colors.amberAccent.withOpacity(0.15),
                   border: Border.all(color: Colors.amberAccent, width: 1.5),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 child: Row(
                   children: [
@@ -397,7 +416,12 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Color(0xff4c1a80), width: 2), padding: const EdgeInsets.symmetric(vertical: 14)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Color(0xff4c1a80), width: 2),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: const StadiumBorder(),
+                ),
                 icon: const Icon(Icons.swap_horiz),
                 label: const Text('Change Wi-Fi / Mobile Data', style: TextStyle(fontWeight: FontWeight.bold)),
                 onPressed: isTesting ? null : showNetMenu,
