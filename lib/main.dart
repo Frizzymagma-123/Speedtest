@@ -84,7 +84,7 @@ Future<void> startBackgroundThreatGuard() async {
     bgThreatTaskName,
     bgThreatTaskName,
     frequency: const Duration(minutes: 15),
-    existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+    existingWorkPolicy: ExistingWorkPolicy.keep,
     constraints: Constraints(networkType: NetworkType.connected),
   );
 }
