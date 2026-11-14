@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:android_intent_plus/android_intent.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class DefenderShieldLogo extends StatelessWidget {
   final double size;
@@ -75,11 +76,14 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
   int ping = 0;
   double down = 0.0, up = 0.0, gauge = 0.0;
   Timer? _netWatchTimer;
+  final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
 
   @override
   void initState() {
     super.initState();
-    syncActiveNetwork().then((_) => runThreatCheck());
+    _initNotifications().then((_) {
+      syncActiveNetwork().then((_) => runThreatCheck());
+    });
     _netWatchTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!isTesting) syncActiveNetwork();
     });
@@ -89,6 +93,34 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
   void dispose() {
     _netWatchTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _initNotifications() async {
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    await _notifications.initialize(const InitializationSettings(android: androidInit));
+    if (threatProtectionEnabled) {
+      await _notifications
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+    }
+  }
+
+  Future<void> _sendThreatNotification(String alertBody) async {
+    if (!threatProtectionEnabled) return;
+    const androidDetails = AndroidNotificationDetails(
+      'threat_protection_channel',
+      'Threat Protection Alerts',
+      channelDescription: 'Alerts only when a network attack or hijack is detected',
+      importance: Importance.max,
+      priority: Priority.high,
+      icon: '@mipmap/ic_launcher',
+    );
+    await _notifications.show(
+      1001,
+      'Security Alert: Network Threat Detected',
+      alertBody,
+      const NotificationDetails(android: androidDetails),
+    );
   }
 
   Future<String> getHardwareNetwork() async {
@@ -145,7 +177,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
         req.followRedirects = false;
         final res = await req.close();
         await res.drain();
-        if (res.statusCode != 204 && res.statusCode != 200) {
+        if (res.statusCode != 204 && res.statusCode != 200 && res.statusCode != 302) {
           detectedIssue = "Warning: Captive portal or proxy interception detected (Status ${res.statusCode}).";
         }
       } on HandshakeException {
@@ -162,12 +194,18 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
         isScanningThreat = false;
         threatAlertMessage = threatProtectionEnabled ? detectedIssue : null;
       });
+      if (threatProtectionEnabled && detectedIssue != null) {
+        _sendThreatNotification(detectedIssue);
+      }
     }
   }
   void showNetMenu() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xff262626),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (_) => Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -177,7 +215,12 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
             const Text('Switch Connection to Test', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff4c1a80), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xff4c1a80),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: const StadiumBorder(),
+              ),
               icon: const Icon(Icons.wifi),
               label: const Text('Switch to Wi-Fi'),
               onPressed: () async {
@@ -190,7 +233,12 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xff333333), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xff333333),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: const StadiumBorder(),
+              ),
               icon: const Icon(Icons.cell_tower),
               label: const Text('Switch to Mobile Data'),
               onPressed: () async {
@@ -200,6 +248,12 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
                   await AndroidIntent(action: 'android.settings.WIFI_SETTINGS').launch();
                 }
               },
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Turn off Wi-Fi to check mobile data speed',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11, color: Colors.white54),
             ),
           ],
         ),
@@ -292,7 +346,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
       while (runDown && mounted && !aborted) {
         try {
           final req = await ioClient.getUrl(Uri.parse('https://cloudflare.com'));
-          req.headers.set('Origin', 'https://cloudflare.com');
+          req.headers.set('Origin', 'https://speed.cloudflare.com');
           final res = await req.close();
           await for (var chunk in res) {
             if (!runDown || !mounted || aborted) break;
@@ -338,8 +392,8 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
       final ioClient = HttpClient();
       while (runUp && mounted && !aborted) {
         try {
-          final req = await ioClient.postUrl(Uri.parse('https://cloudflare.com/__up'));
-          req.headers.set('Origin', 'https://cloudflare.com');
+          final req = await ioClient.postUrl(Uri.parse('https://cloudflare.com'));
+          req.headers.set('Origin', 'https://speed.cloudflare.com');
           req.headers.set('Content-Type', 'application/octet-stream');
           req.contentLength = chunk64k.length * 16;
           for (int i = 0; i < 16; i++) {
@@ -429,6 +483,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
                 onChanged: (val) {
                   setState(() => threatProtectionEnabled = val);
                   if (val) {
+                    _initNotifications();
                     runThreatCheck();
                   } else {
                     setState(() => threatAlertMessage = null);
@@ -472,7 +527,7 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
                 decoration: BoxDecoration(
                   color: Colors.redAccent.withOpacity(0.15),
                   border: Border.all(color: Colors.redAccent, width: 1.5),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 child: Row(
                   children: [
@@ -546,7 +601,12 @@ class _AccountDashboardScreenState extends State<AccountDashboardScreen> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Color(0xff4c1a80), width: 2), padding: const EdgeInsets.symmetric(vertical: 14)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Color(0xff4c1a80), width: 2),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: const StadiumBorder(),
+                ),
                 icon: const Icon(Icons.swap_horiz),
                 label: const Text('Change Wi-Fi / Mobile Data', style: TextStyle(fontWeight: FontWeight.bold)),
                 onPressed: isTesting ? null : showNetMenu,
