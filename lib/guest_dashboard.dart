@@ -78,7 +78,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
                 backgroundColor: const Color(0xff4c1a80),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: const StadiumBorder(),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
               ),
               icon: const Icon(Icons.wifi),
               label: const Text('Switch to Wi-Fi'),
@@ -96,7 +96,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
                 backgroundColor: const Color(0xff333333),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: const StadiumBorder(),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
               ),
               icon: const Icon(Icons.cell_tower),
               label: const Text('Switch to Mobile Data'),
@@ -135,7 +135,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     }
 
     bool aborted = false;
-    setState(() { isTesting = true; phase = "Testing Ping"; ping = 0; down = 0.0; up = 0.0; gauge = 0.05; });
+    setState(() { isTesting = true; phase = "TESTING PING..."; ping = 0; down = 0.0; up = 0.0; gauge = 0.05; });
 
     final guardTimer = Timer.periodic(const Duration(milliseconds: 250), (t) async {
       final liveNet = await getHardwareNetwork();
@@ -182,7 +182,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     if (aborted || !mounted) { guardTimer.cancel(); return; }
     await Future.delayed(const Duration(milliseconds: 300));
     if (aborted || !mounted) { guardTimer.cancel(); return; }
-    setState(() => phase = "Testing Download Speed");
+    setState(() => phase = "TESTING DOWNLOAD...");
 
     final swDown = Stopwatch()..start();
     int bytesDown = 0;
@@ -226,7 +226,8 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
     await Future.wait(downFutures);
 
     if (aborted || !mounted) { guardTimer.cancel(); return; }
-    setState(() { phase = "Testing Upload Speed"; gauge = 0.0; });
+    setState(() => phase = "TESTING UPLOAD...");
+    gauge = 0.0;
     await Future.delayed(const Duration(milliseconds: 300));
     if (aborted || !mounted) { guardTimer.cancel(); return; }
 
@@ -282,19 +283,20 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
       setState(() { isTesting = false; phase = "COMPLETED"; gauge = 0.0; });
     }
   }
-  Widget statCol(String label, String val, Color col) => Column(children: [
+  Widget _buildMetricsColumn(String label, String value, Color color) => Column(children: [
         Text(label, style: const TextStyle(fontSize: 11, color: Colors.white38, fontWeight: FontWeight.bold)),
         const SizedBox(height: 4),
-        Text(val, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: col)),
+        Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color)),
       ]);
 
   @override
   Widget build(BuildContext context) {
-    String centerText = !isTesting ? "START" : (phase == "Testing Ping" ? "$ping ms" : (phase.contains("Download") ? down.toStringAsFixed(1) : up.toStringAsFixed(1)));
+    String centerText = !isTesting ? "START" : (phase == "TESTING PING..." ? "$ping ms" : (phase.contains("DOWNLOAD") ? down.toStringAsFixed(1) : up.toStringAsFixed(1)));
 
     return Scaffold(
+      backgroundColor: const Color(0xff1a1a1a),
       appBar: AppBar(
-        title: const Text('Guest Speedtest', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        title: const Text('Speedtest App Dashboard', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         backgroundColor: const Color(0xff111111),
         centerTitle: true,
         leading: const Icon(Icons.person_outline, color: Colors.white54),
@@ -349,7 +351,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
         ),
       ),
       body: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
             if (showGuestLockNotice)
@@ -385,30 +387,44 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
             ),
             const SizedBox(height: 24),
             Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-              statCol("PING", "$ping ms", Colors.amberAccent),
-              statCol("DOWNLOAD", "${down.toStringAsFixed(1)} Mbps", const Color(0xffa366ff)),
-              statCol("UPLOAD", "${up.toStringAsFixed(1)} Mbps", const Color(0xffdf80ff)),
+              _buildMetricsColumn("PING", "$ping ms", Colors.amberAccent),
+              _buildMetricsColumn("DOWNLOAD", "${down.toStringAsFixed(1)} Mbps", const Color(0xffa366ff)),
+              _buildMetricsColumn("UPLOAD", "${up.toStringAsFixed(1)} Mbps", const Color(0xffdf80ff)),
             ]),
             const Spacer(),
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                SizedBox(width: 220, height: 220, child: CircularProgressIndicator(value: gauge, strokeWidth: 10, color: const Color(0xff4c1a80), backgroundColor: Colors.white10)),
-                GestureDetector(
-                  onTap: isTesting ? null : runTest,
-                  child: Container(
-                    width: 180, height: 180,
-                    decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xff262626)),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(centerText, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-                        if (isTesting && phase != "Testing Ping") const Text("Mbps", style: TextStyle(fontSize: 12, color: Colors.white38)),
-                      ],
+            Center(
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  SizedBox(width: 220, height: 220, child: CircularProgressIndicator(value: gauge, strokeWidth: 10, color: const Color(0xff4c1a80), backgroundColor: Colors.white10)),
+                  GestureDetector(
+                    onTap: isTesting ? null : runTest,
+                    child: Container(
+                      width: 180, height: 180,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xff262626),
+                        border: Border.all(color: Colors.white12, width: 2),
+                        boxShadow: [
+                          if (isTesting)
+                            BoxShadow(
+                              color: const Color(0xff4c1a80).withOpacity(0.4),
+                              blurRadius: 20,
+                              spreadRadius: 4,
+                            ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(centerText, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
+                          if (isTesting && phase != "TESTING PING...") const Text("Mbps", style: TextStyle(fontSize: 12, color: Colors.white38)),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
             const SizedBox(height: 30),
             Text(phase, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: phase == "Connection Disconnected" ? Colors.redAccent : Colors.white54)),
@@ -420,7 +436,7 @@ class _GuestDashboardScreenState extends State<GuestDashboardScreen> {
                   foregroundColor: Colors.white,
                   side: const BorderSide(color: Color(0xff4c1a80), width: 2),
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: const StadiumBorder(),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                 ),
                 icon: const Icon(Icons.swap_horiz),
                 label: const Text('Change Wi-Fi / Mobile Data', style: TextStyle(fontWeight: FontWeight.bold)),
